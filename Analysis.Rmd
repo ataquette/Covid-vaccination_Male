@@ -1,0 +1,1431 @@
+---
+title: "Analysis"
+author: "Alex Alvergne & Victoria Male"
+date: "26/05/2021"
+output: html_document
+---
+
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,eval = TRUE, include=TRUE, warning=FALSE, message=FALSE, results="hide")
+```
+
+## Data preparation
+
+This is an R Markdown document for the analysis of the following paper  <https://www.medrxiv.org/content/10.1101/2021.11.15.21266317v1>.
+
+```{r packages}
+# package load #
+# Ensures the package "pacman" is installed
+if (!require("pacman")) install.packages("pacman")
+# Packages available from CRAN
+##############################
+pacman::p_load(
+     
+  here,
+  rio,
+  dplyr,
+  gtsummary
+  ) 
+
+## Load
+library(pacman)
+pacman::p_load(
+     rio,         # import/export
+     here,        # file locator
+     purrr,       # iteration
+     tidyverse,
+     flextable,
+     ggplot2,
+     forcats,
+     kableExtra,
+     flextable,
+     Hmisc,
+     pbapply,
+     mice,
+     GGally,
+     effects,
+     gridExtra,
+     grid,
+     lattice,
+     gtsummary,
+     vgam,
+     janitor,
+     ggpubr
+)
+```
+
+## Data manipulation
+### Data load
+```{r dataload}
+
+# original data
+data<-import(here("Exported_dataset_18_10_21_cleaned_transformed_select_variables.csv")) # load original data
+head(data)
+
+```
+
+### Rename columns
+```{r rename}
+datac<-data%>% 
+  janitor::clean_names()
+names(datac)
+```
+
+
+### Exclusions 
+```{r recode}
+str(datac)
+datac <- datac%>% modify_if(is.character, as.factor) 
+levels(datac$normal_cycle_day)[19]<-"29"
+
+# change character to integer
+datac <- datac %>% mutate_at(.vars = c("age_years","normal_cycle_day"),as.character)
+
+datac <- datac %>% mutate_at(.vars = c("age_years","normal_cycle_day"),as.numeric)
+# change all characters variables to factor
+
+
+# create new variable for contraceptive
+datac <- datac%>% mutate (horm_group= case_when(
+                    	hormonal_contraception == "Combined pill" ~ "Combined",
+                      hormonal_contraception == "Contraceptive implant" ~ "Progestin-only",
+                    	hormonal_contraception == "Contraceptive injection" ~ "Progestin-only",
+                    	hormonal_contraception == "Contraceptive patch" ~ "Combined",
+                    	hormonal_contraception == "Intrauterine system" ~ "IUD",
+                    	hormonal_contraception == "No"~ "None",
+                    	hormonal_contraception == "Other"~ "Other",
+                    	hormonal_contraception == "Progesterone only pill" ~ "Progestin-only",
+                      hormonal_contraception ==	"Vaginal ring" ~ "Combined"
+                                )
+                            )
+
+# create new variable for contraceptive binary
+datac <- datac%>% mutate (horm_binary= case_when(
+                    	hormonal_contraception == "Combined pill" ~ "Contra",
+                      hormonal_contraception == "Contraceptive implant" ~ "Contra",
+                    	hormonal_contraception == "Contraceptive injection" ~ "Contra",
+                    	hormonal_contraception == "Contraceptive patch" ~ "Contra",
+                    	hormonal_contraception == "Intrauterine system" ~ "Contra",
+                    	hormonal_contraception == "No"~ "None",
+                    	hormonal_contraception == "Other"~ "Other",
+                    	hormonal_contraception == "Progesterone only pill" ~ "Contra",
+                      hormonal_contraception ==	"Vaginal ring" ~ "HormContra"
+                                )
+                            )
+
+datac$horm_binary <- as.factor(datac$horm_binary)
+
+# Recode timing of vaccine
+summary(datac$vaccine_timing_dose2)
+
+# Dose1
+datac<-datac%>% mutate (vaccine_timing_dose2_phase=case_when(
+  vaccine_timing_dose2 < -2 ~ "Before ovulation",
+  vaccine_timing_dose2 > -3 &  vaccine_timing_dose2 < 5 ~ "During ovulation ",
+  vaccine_timing_dose2 > 4  ~ "After ovulation"
+))
+
+
+# Dose2
+datac<-datac%>% mutate (vaccine_timing_dose1_phase=case_when(
+  vaccine_timing_dose1 < -2 ~ "Before ovulation",
+  vaccine_timing_dose1 > -3 &  vaccine_timing_dose1 < 5 ~ "During ovulation ",
+  vaccine_timing_dose1 > 4  ~ "After ovulation"
+))
+
+
+# recode the outcome
+# datac$flow_dose1
+datac <- datac%>% mutate (flow_dose1_ordered= case_when(
+  flow_dose1=="Lighter than usual" ~ 1,
+  flow_dose1=="The same as usual" ~ 2,
+  flow_dose1=="Heavier than usual" ~3
+))
+
+
+# datac$flow_dose2
+datac <- datac%>% mutate (flow_dose2_ordered= case_when(
+  flow_dose2=="Lighter than usual" ~ 1,
+  flow_dose2=="The same as usual" ~ 2,
+  flow_dose2=="Heavier than usual" ~3
+))
+
+
+# data$timing_dose1
+datac <- datac%>% mutate (timing_dose1_ordered= case_when(
+  timing_dose2=="Earlier than usual" ~ 1,
+  timing_dose2=="On time" ~ 2,
+  timing_dose2=="Later than usual" ~3
+))
+  
+# data$timing_dose2
+datac <- datac%>% mutate (timing_dose2_ordered= case_when(
+  timing_dose2_2=="Earlier than usual" ~ 1,
+  timing_dose2_2=="On time" ~ 2,
+  timing_dose2_2=="Later than usual" ~3
+))
+
+```
+
+#### Data dose 1 (Data drop_na, relevel and scale, n=1012)
+```{r recodeflowd1}
+data_first<- datac %>%  # 1273
+filter(hormonal_contraception!="")%>% # 1268
+filter(horm_binary=="None") %>%  # 1117
+filter(vaccine_timing_dose1<13) %>% # 1059
+filter(brand_dose1 !="Janssen (J&J)")%>% # 1043
+filter(brand_dose1 !="")%>% # 1040
+filter(timing_dose2 !="") %>% # 1032
+filter(flow_dose1 !="") %>% # 1012
+mutate (age_years = scale(age_years),# scale variables  
+        normal_cycle_day=scale(normal_cycle_day),
+        vaccine_timing_dose1=scale(vaccine_timing_dose1)
+        )
+
+# drop levels
+data_first$brand_dose1<-droplevels(data_first$brand_dose1)
+data_first$timing_dose2<-droplevels(data_first$timing_dose2)
+data_first$flow_dose1<-droplevels(data_first$flow_dose1)
+
+
+# size of dataset
+dim (data_first) # 1012 final sample
+
+
+
+# Relevel
+data_first$brand_dose1<-relevel(data_first$brand_dose1, ref = "Pfizer")
+
+
+
+```
+
+
+
+#### Data dose 2 (Data drop_na, relevel and scale)
+```{r recodeflowd2}
+data_second<- datac %>% 
+filter(hormonal_contraception!="")%>%  # 1268
+filter(horm_binary=="None") %>%  # 1117
+filter(vaccine_timing_dose2<13) %>%  # 641
+filter(brand_dose2 !="Janssen (J&J)")%>% # 641
+filter(brand_dose2 !="") %>% # 639
+filter(timing_dose2_2 !="") %>% # 636
+filter(flow_dose2 !="")  %>%# 635
+mutate (age_years = scale(age_years),# scale variables  
+        normal_cycle_day=scale(normal_cycle_day),
+        vaccine_timing_dose2=scale(vaccine_timing_dose2)
+        )
+
+# drop levels
+data_second$brand_dose2<-droplevels(data_second$brand_dose2)
+data_second$timing_dose2_2<-droplevels(data_second$timing_dose2_2)
+data_second$flow_dose2<-droplevels(data_second$flow_dose2)
+
+
+# size of dataset
+dim (data_second) # 635 final sample
+
+
+
+# Relevel
+data_second$brand_dose1<-relevel(data_second$brand_dose1, ref = "Pfizer")
+data_second$brand_dose2<-relevel(data_second$brand_dose2, ref = "Pfizer")
+
+
+
+```
+
+
+### Summary
+#### Distribution table
+```{r summary}
+# library(summarytools)
+# dfSummary(datac, style='grid', plain.ascii = FALSE, graph.col = FALSE)
+# view(dfSummary(datac))
+```
+
+
+
+### Models {.tabset .tabset-fade}
+We performed non-proportional hazard multinomial models. 
+
+#### Flow_dose1 
+ 
+```{r modelordinal_flow1, results='asis', echo=FALSE}
+
+table(data_first$flow_dose1_ordered, data_first$endometriosis) # n<5
+table(data_first$flow_dose1_ordered, data_first$heavy_menstrual_bleeding) # nmin =10
+table(data_first$flow_dose1_ordered, data_first$uterine_fibroids) # n==0
+table(data_first$flow_dose1_ordered, data_first$pcos) # nmin=8
+
+# we must remove  uterine fibroids as less than 20 in total for yes
+# set list of exposures to test
+exposures <- c(
+    Cs(
+        age_years,
+        normal_cycle_day,
+        endometriosis,
+        heavy_menstrual_bleeding,
+        pcos,
+        brand_dose1,
+        vaccine_timing_dose1,
+        vaccine_timing_dose1_phase
+        ))
+
+## model function with nonproportional odds------------------------------------------------------------
+library(VGAM)
+models_nonprop <- function(x) {
+    
+        vglm(as.formula(
+            paste0(
+                "flow_dose1_ordered ~  ",
+                x
+                
+            )
+        ), data = data_first,cumulative(parallel=FALSE))
+    
+}
+
+## run logistic models
+models_univariate_non_prop <- as.list(seq(1,length(exposures))) # create list to store model results
+models_univariate_non_prop <- pblapply(exposures, models_nonprop)
+
+
+
+
+
+### p values under FDR-------------------------------------------------------------------
+
+library(data.table)
+
+# create function to get the coef only from the summary table
+foo <- function(vglm) 
+  {
+  coef <- coef(summary(vglm))
+  output <- data.frame(coef)
+  output
+}
+
+#
+smry <-lapply(models_univariate_non_prop,foo)
+
+# make a list while keeping the first row as names
+all_models <-do.call(rbind, setNames(smry, NULL))
+
+# combine row names into column
+  d <- all_models
+  names <- rownames(d)
+  rownames(d) <- NULL
+  all_models <- cbind(names,d)
+
+
+
+# this is the FDR p values
+all_models$q.value <- p.adjust(all_models$Pr...z..,method = "BH")
+
+
+names(all_models)<-c("term","estimate","std.error","statistic","p.value","q.value")
+
+
+## Table with adjusted p values-------------------------------------------------------------------
+
+row<- which(all_models$q.value<0.05) # to highlight in red those which are significant
+library(kableExtra)
+
+# table
+all_models$term <- c(
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                               
+"age_scaled:lighter rather than same" ,                                 
+"age_scaled:normal rather than heavy",                                  
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                               
+"cycle_length_scaled:lighter rather than same",                          
+"cycle_length_scaled:normal rather than heavy",                          
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                             
+"endometriosis:lighter rather than same",                           
+"endometriosis:normal rather than heavy",                           
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                             
+"heavy_menstrual_bleeding:lighter rather than same",     
+"heavy_menstrual_bleeding:normal rather than heavy",                
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                              
+"pcos:lighter rather than same" ,                                   
+"pcos:normal rather than heavy" ,                                  
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                               
+"brand_dose1_AstraZeneca:lighter rather than same",                       
+"brand_dose1_AstraZeneca:normal rather than heavy",                       
+"brand_dose1_Moderna:lighter rather than same",                         
+"brand_dose1_Moderna:normal rather than heavy",                         
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                            
+"vaccine_timing_dose1_scaled:lighter rather than same"  ,                   
+"vaccine_timing_dose1_scaled:normal rather than heavy" ,                    
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                              
+"vaccine_timing_dose1_Before ovulation:lighter rather than same" ,
+"vaccine_timing_dose1_Before ovulation:normal rather than heavy" ,
+"vaccine_timing_dose1_During ovulation :lighter rather than same",
+"vaccine_timing_dose1_During ovulation :normal rather than heavy")
+
+
+
+table<-all_models %>% 
+  mutate(OR=round(exp(estimate),3)) %>% 
+  mutate(CILow=round(exp(estimate-1.96*std.error),3))%>% 
+  mutate(CIHigh=round(exp(estimate+1.96*std.error),3))%>% 
+  mutate(statistic=round(statistic,3))%>%
+  mutate(p.value=round(p.value,3))%>%
+  mutate(q.value=round(q.value,3))%>%
+  select(term,OR,CILow, CIHigh,statistic,p.value, q.value) %>%
+  kbl(caption = "Flow after dose 1 | Univariable models adjusted p-values") %>%
+  kable_paper(bootstrap_options = "striped", full_width = F)%>%
+    pack_rows("Age", 1, 4) %>%
+    pack_rows("Cycle length", 5, 8) %>%
+    pack_rows("Endometriosis", 9, 12) %>%
+    pack_rows("Heavy menstrual bleeding", 13, 16) %>%
+    pack_rows("PCOS", 17, 20) %>%
+    pack_rows("Vaccine Brand", 21, 26) %>%
+    pack_rows("Timing of vaccine (continuous time)", 27, 30) %>%
+    pack_rows("Timing of vaccine (discrete time)", 31, 36) %>%
+    column_spec(1, bold = T, border_right = T) %>%
+  row_spec(row=c(row), bold = F, color = "white", background = "#D7261E") %>%
+  kable_styling(full_width = T)
+
+
+table
+
+table%>%
+  save_kable("Table_Uni_Flow1.pdf")
+
+
+
+
+```
+
+
+##### Plot Flow dose 1
+```{r plotflow1}
+
+
+# plot attempt
+library(dplyr)
+
+# Remove the intercepts and calculate CIs
+all_models2<-all_models %>% 
+  mutate(RRR=round(exp(estimate),3)) %>% 
+  mutate(CILow=round(exp(estimate-1.96*std.error),3))%>% 
+  mutate(CIHigh=round(exp(estimate+1.96*std.error),3))%>% 
+  mutate(statistic=round(statistic,3)) %>%
+filter (term!= c("(Intercept):lighter rather than same", "(Intercept):normal rather than heavy") )
+
+#all_models2$term
+x <- data.frame(
+    symptoms=c(rep("Age: Lighter rather than same", 1), 
+             rep("Age: Normal rather than heavy", 1),
+             rep("Cycle length: Lighter rather than same", 1),
+             rep("Cycle length: Normal rather than heavy", 1),
+             rep("Endometriosis: Lighter rather than same", 1),
+             rep("Endometriosis: Normal rather than heavy", 1),
+             rep("Heavy menstrual bleeding: Lighter rather than same", 1) ,
+             rep("Heavy menstrual bleeding: Normal rather than heavy", 1) ,
+             rep("PCOS: Lighter rather than same", 1) ,
+             rep("PCOS: Normal rather than heavy", 1) ,
+             rep("AstraZeneca: Lighter rather than same", 1) ,
+             rep("AstraZeneca: Normal rather than heavy", 1) ,
+             rep("Moderna: Lighter rather than same", 1) ,
+             rep("Moderna: Normal rather than heavy", 1) ,
+             rep("Vaccine timing: Lighter rather than same", 1) ,
+             rep("Vaccine timing: Normal rather than heavy", 1) ,
+             rep("Vaccine timing before ovulation:Lighter rather than same", 1) ,
+             rep("Vaccine timing before ovulation: Normal rather than heavy", 1) ,
+             rep("Vaccine timing around ovulation: Lighter rather than same", 1) ,
+             rep("Vaccine timing around ovulation: Normal rather than heavy", 1 )),
+            
+    OR=c((all_models2$RRR)),
+    Lower=c((all_models2$CILow)),
+    Upper=c((all_models2$CIHigh)),
+    Variables=c(rep("Age", 2), 
+             rep("Cycle length", 2),
+             rep("Endometriosis", 2),
+             rep("Heavy menstrual bleeding", 2),
+             rep("PCOS", 2) ,
+             rep("Vaccine brand", 4) ,
+             rep("Vaccine timing (numeric)", 2) ,
+             rep("Vaccine timing (categorical)", 4))
+
+)           
+                        
+                        
+
+
+# Set colours
+library(RColorBrewer)
+# Define the number of colors you want
+nb.cols <- 150
+mycolors <- colorRampPalette(brewer.pal(8, "BrBG"))(nb.cols)
+
+# Plot
+plot<-x %>% 
+  ggplot(aes(x = OR, y=Variables)) + 
+  labs(y = "")+
+# geom_rect(aes(xmin = 0, xmax = 5,
+#               ymin = -Inf, ymax = Inf, fill = Variables)) +
+  geom_errorbarh(aes(xmin = Lower, xmax = Upper)) +
+  geom_point(aes(colour = Variables, shape = Variables), size = 5 ) +
+  geom_vline(aes(xintercept = 1), linetype = 2, col="red") +
+  scale_shape_manual(values = rep(15, 67)) +
+  scale_fill_manual(values = mycolors) +
+  scale_x_log10() +
+  coord_cartesian(xlim = c(0.1, 4)) +
+  facet_grid(symptoms~., switch = "y") +
+  theme_bw() +
+#  theme(legend.position = "none")+
+  theme(panel.spacing.y = unit(0, "points"),
+        panel.border = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.length.y = unit(0, "points"),
+        strip.text.y.left = element_text(angle = 0),
+        strip.background.y = element_blank(),
+        strip.placement = "outside",
+        axis.line = element_line()
+      
+        )+
+  ggtitle("Flow after dose 1")
+
+plot_flow1<-plot
+# control the legend
+plot+guides(shape=FALSE, size=FALSE, fill=FALSE,colour=guide_legend(ncol=1))
+
+# save the plot
+#ggsave(filename="Figure_uni_Flow1.jpeg", width = 30,  height = 30, units = "cm",dpi = 300)
+
+# save the plot
+ggsave(filename="Figure_uni_Flow1.pdf", width = 30,  height = 15, units = "cm",dpi = 300)
+```
+
+
+
+
+#### Flow_dose2 
+
+
+
+```{r modelordinal_flow2, results='asis', echo=FALSE}
+
+#
+table(data_second$flow_dose2_ordered, data_second$endometriosis) # n<5
+table(data_second$flow_dose2_ordered, data_second$heavy_menstrual_bleeding) # nmin =10
+table(data_second$flow_dose2_ordered, data_second$uterine_fibroids) # n==0
+table(data_second$flow_dose2_ordered, data_second$pcos) # nmin=8
+
+# We must remove fibroids a because less than 5 observations for some combination of variables (lighter / yes).
+
+# relevel the exposures
+data_second$flow_dose2<-relevel(data_second$flow_dose2, ref = "The same as usual")
+
+
+
+# set list of exposures to test
+exposures <- c(
+    Cs(
+        age_years,
+        normal_cycle_day,
+        endometriosis,
+        heavy_menstrual_bleeding,
+     #   uterine_fibroids, 
+        pcos,
+        brand_dose2,
+        vaccine_timing_dose2,
+        vaccine_timing_dose2_phase
+        ))
+
+### Univariate ------------------------------------------------------------
+## model function with proportional odds------------------------------------------------------------
+library(VGAM)
+models_prop <- function(x) {
+    
+        vglm(as.formula(
+            paste0(
+                "flow_dose2_ordered ~  ",
+                x
+                
+            )
+        ), data = data_second,cumulative(parallel=FALSE))
+    
+}
+
+## run logistic models
+models_univariate_prop <- as.list(seq(1,length(exposures))) # create list to store model results
+models_univariate_prop <- pblapply(exposures, models_prop)
+
+#FDR-------------------------------------------------------------------
+
+library(data.table)
+
+# create function to get the coef only from the summary table
+foo <- function(vglm) 
+  {
+  coef <- coef(summary(vglm))
+  output <- data.frame(coef)
+  output
+}
+
+#
+smry <-lapply(models_univariate_prop,foo)
+
+# make a list while keeping the first row as names
+all_models <-do.call(rbind, setNames(smry, NULL))
+
+# combine row names into column
+  d <- all_models
+  names <- rownames(d)
+  rownames(d) <- NULL
+  all_models <- cbind(names,d)
+
+
+
+# this is the FDR p values
+all_models$q.value <- p.adjust(all_models$Pr...z..,method = "BH")
+
+
+names(all_models)<-c("term","estimate","std.error","statistic","p.value","q.value")
+
+
+## Table with adjusted p values------------------------------------------------------------------
+
+row<- which(all_models$q.value<0.05) # to highlight in red those which are significant
+library(kableExtra)
+
+# table
+
+all_models$term <- c(
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                               
+"age_scaled:lighter rather than same" ,                                 
+"age_scaled:normal rather than heavy",                                  
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                               
+"cycle_length_scaled:lighter rather than same",                          
+"cycle_length_scaled:normal rather than heavy",     
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                             
+"endometriosis:lighter rather than same",                           
+"endometriosis:normal rather than heavy",     
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                             
+"heavy_menstrual_bleeding:lighter rather than same",     
+"heavy_menstrual_bleeding:normal rather than heavy",                
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                              
+"pcos:lighter rather than same" ,                                   
+"pcos:normal rather than heavy" ,                                  
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                               
+"brand_dose2_AstraZeneca:lighter rather than same",                       
+"brand_dose2_AstraZeneca:normal rather than heavy",                       
+"brand_dose2_Moderna:lighter rather than same",                         
+"brand_dose2_Moderna:normal rather than heavy",                         
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                            
+"vaccine_timing_dose2_scaled:lighter rather than same"  ,                     
+"vaccine_timing_dose2_scaled:normal rather than heavy" ,                      
+"(Intercept):lighter rather than same",                                
+"(Intercept):normal rather than heavy",                              
+"vaccine_timing_dose2_Before ovulation:lighter rather than same" ,
+"vaccine_timing_dose2_Before ovulation:normal rather than heavy" ,
+"vaccine_timing_dose2_During ovulation :lighter rather than same",
+"vaccine_timing_dose2_During ovulation :normal rather than heavy")
+
+
+table<-all_models %>% 
+  mutate(OR=round(exp(estimate),3)) %>% 
+  mutate(CILow=round(exp(estimate-1.96*std.error),3))%>% 
+  mutate(CIHigh=round(exp(estimate+1.96*std.error),3))%>% 
+  mutate(statistic=round(statistic,3))%>%
+  mutate(p.value=round(p.value,3))%>%
+  mutate(q.value=round(q.value,3))%>%
+  select(term,OR,CILow, CIHigh,statistic,p.value, q.value) %>%
+  kbl(caption = "Flow after dose 2 | Univariable models adjusted p-values") %>%
+  kable_paper(bootstrap_options = "striped", full_width = F)%>%
+    pack_rows("Age", 1, 4) %>%
+    pack_rows("Cycle length", 5, 8) %>%
+    pack_rows("Endometriosis", 9, 12) %>%
+    pack_rows("Heavy menstrual bleeding", 13, 17) %>%
+ #   pack_rows("Fibroids", 17, 20) %>%
+    pack_rows("PCOS", 18, 20) %>%
+    pack_rows("Vaccine Brand", 21, 25) %>%
+    pack_rows("Timing of vaccine (continuous time)", 26, 29) %>%
+    pack_rows("Timing of vaccine (discrete time)", 30, 36) %>%
+    column_spec(1, bold = T, border_right = T) %>%
+  row_spec(row=c(row), bold = T, color = "white", background = "#D7261E") %>%
+  kable_styling(full_width = T)
+
+table
+
+table%>%
+  save_kable("Table_Uni_Flow2.pdf")
+
+
+
+
+```
+
+
+
+
+
+
+##### Plot Flow dose 2
+
+```{r plotuniv_flow2}
+
+# plot attempt
+library(dplyr)
+
+# Remove the intercepts and calculate CIs
+all_models2<-all_models %>% 
+  mutate(OR=round(exp(estimate),3)) %>% 
+  mutate(CILow=round(exp(estimate-1.96*std.error),3))%>% 
+  mutate(CIHigh=round(exp(estimate+1.96*std.error),3))%>% 
+  mutate(statistic=round(statistic,3)) %>%
+filter (term!= c("(Intercept):lighter rather than same", "(Intercept):normal rather than heavy") )
+
+#all_models2$term
+x <- data.frame(
+    symptoms=c(rep("Age: Lighter rather than same", 1), 
+             rep("Age: Normal rather than heavy", 1),
+             rep("Cycle length: Lighter rather than same", 1),
+             rep("Cycle length: Normal rather than heavy", 1),
+             rep("Endometriosis: Lighter rather than same", 1),
+             rep("Endometriosis: Normal rather than heavy", 1),
+             rep("Heavy menstrual bleeding: Lighter rather than same", 1) ,
+             rep("Heavy menstrual bleeding: Normal rather than heavy", 1) ,
+             rep("PCOS: Lighter rather than same", 1) ,
+             rep("PCOS: Normal rather than heavy", 1) ,
+             rep("AstraZeneca: Lighter rather than same", 1) ,
+             rep("AstraZeneca: Normal rather than heavy", 1) ,
+             rep("Moderna: Lighter rather than same", 1) ,
+             rep("Moderna: Normal rather than heavy", 1) ,
+             rep("Vaccine timing: Lighter rather than same", 1) ,
+             rep("Vaccine timing: Normal rather than heavy", 1) ,
+             rep("Vaccine timing before ovulation:Lighter rather than same", 1) ,
+             rep("Vaccine timing before ovulation: Normal rather than heavy", 1) ,
+             rep("Vaccine timing around ovulation: Lighter rather than same", 1) ,
+             rep("Vaccine timing around ovulation: Normal rather than heavy", 1 )),
+            
+    OR=c((all_models2$OR)),
+    Lower=c((all_models2$CILow)),
+    Upper=c((all_models2$CIHigh)),
+    Variables=c(rep("Age", 2), 
+             rep("Cycle length", 2),
+             rep("endometriosis", 2),
+             rep("Heavy menstrual bleeding", 2),
+             rep("PCOS", 2) ,
+             rep("Vaccine brand", 4) ,
+             rep("Vaccine timing (numeric)", 2) ,
+             rep("Vaccine timing (categorical)", 4))
+
+)           
+                        
+                        
+
+
+# Set colours
+library(RColorBrewer)
+# Define the number of colors you want
+nb.cols <- 150
+mycolors <- colorRampPalette(brewer.pal(8, "BrBG"))(nb.cols)
+
+# Plot
+plot<-x %>% 
+  ggplot(aes(x = OR, y=Variables)) + 
+  labs(y = "")+
+ #geom_rect(aes(xmin = 0, xmax = 5,
+#               ymin = -Inf, ymax = Inf, fill = Variables)) +
+  geom_errorbarh(aes(xmin = Lower, xmax = Upper)) +
+  geom_point(aes(colour = Variables, shape = Variables), size = 4 ) +
+  geom_vline(aes(xintercept = 1), linetype = 2, col="red") +
+  scale_shape_manual(values = rep(15, 67)) +
+  scale_fill_manual(values = mycolors) +
+  scale_x_log10() +
+  coord_cartesian(xlim = c(0.1, 7)) +
+  facet_grid(symptoms~., switch = "y") +
+  theme_bw() +
+#  theme(legend.position = "none")+
+  theme(panel.spacing.y = unit(0, "points"),
+        panel.border = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.length.y = unit(0, "points"),
+        strip.text.y.left = element_text(angle = 0),
+        strip.background.y = element_blank(),
+        strip.placement = "outside",
+        axis.line = element_line()
+      
+        )+
+  ggtitle("Flow after dose 2")
+
+plot_flow2<-plot
+# control the legend
+plot+guides(shape=FALSE, size=FALSE, fill=FALSE,colour=guide_legend(ncol=1))
+
+# save the plot
+#ggsave(filename="Figure_uni_Flow2.jpeg", width = 30,  height = 30, units = "cm",dpi = 300)
+
+# save the plot
+ggsave(filename="Figure_uni_Flow2.pdf", width = 30,  height = 15, units = "cm",dpi = 300)
+```
+
+
+
+
+
+### Timing dose 1
+
+
+```{r modelordinal_timing1, results='asis', echo=FALSE}
+table(data_first$timing_dose1_ordered, data_first$endometriosis) # n<5
+table(data_first$timing_dose1_ordered, data_first$heavy_menstrual_bleeding) # nmin =10
+table(data_first$timing_dose1_ordered, data_first$uterine_fibroids) # n==0
+table(data_first$timing_dose1_ordered, data_first$pcos) # nmin=8
+
+
+# Let's remove uterine fibroids
+
+# Relevel the timing variable
+data_first$timing_dose2<-relevel(data_first$timing_dose2, ref = "On time")
+
+
+# set list of exposures to test
+exposures <- c(
+    Cs(
+        age_years,
+        normal_cycle_day,
+        endometriosis,
+        heavy_menstrual_bleeding,
+        pcos,
+        brand_dose1,
+        vaccine_timing_dose1,
+        vaccine_timing_dose1_phase
+        ))
+
+
+
+
+### Univariate ------------------------------------------------------------
+## model function with proportional odds------------------------------------------------------------
+library(VGAM)
+models_prop <- function(x) {
+    
+        vglm(as.formula(
+            paste0(
+                "timing_dose1_ordered ~  ",
+                x
+                
+            )
+        ), data = data_first,cumulative(parallel=FALSE))
+    
+}
+
+## run logistic models
+models_univariate_prop <- as.list(seq(1,length(exposures))) # create list to store model results
+models_univariate_prop <- pblapply(exposures, models_prop)
+
+
+
+library(data.table)
+
+# create function to get the coef only from the summary table
+foo <- function(vglm) 
+  {
+  coef <- coef(summary(vglm))
+  output <- data.frame(coef)
+  output
+}
+
+#
+smry <-lapply(models_univariate_prop,foo)
+
+# make a list while keeping the first row as names
+all_models <-do.call(rbind, setNames(smry, NULL))
+
+# combine row names into column
+  d <- all_models
+  names <- rownames(d)
+  rownames(d) <- NULL
+  all_models <- cbind(names,d)
+
+
+
+# this is the FDR p values
+all_models$q.value <- p.adjust(all_models$Pr...z..,method = "BH")
+
+
+names(all_models)<-c("term","estimate","std.error","statistic","p.value","q.value")
+
+
+## Table with adjusted p values-------------------------------------------------------------------
+
+row<- which(all_models$q.value<0.05) # to highlight in red those which are significant
+library(kableExtra)
+
+# table
+
+all_models$term <- c(
+"(Intercept):earlier rather than on time",                                
+"(Intercept):on time rather than later",                               
+"age_scaled:earlier rather than on time" ,                                 
+"age_scaled:on time rather than later",                                  
+"(Intercept):earlier rather than on time",                                
+"(Intercept):on time rather than later",                               
+"cycle_length_scaled:earlier rather than on time",                        
+"cycle_length_scaled:on time rather than later",                          
+"(Intercept):earlier rather than on time",                                
+"(Intercept):on time rather than later",                             
+"endometriosis:earlier rather than on time",                           
+"endometriosis:on time rather than later",                           
+"(Intercept):earlier rather than on time",                                
+"(Intercept):on time rather than later",                             
+"heavy_menstrual_bleeding:earlier rather than on time",     
+"heavy_menstrual_bleeding:on time rather than later",                
+"(Intercept):earlier rather than on time",                                
+"(Intercept):on time rather than later",                              
+"pcos:earlier rather than on time" ,                                   
+"pcos:on time rather than later" ,                                  
+"(Intercept):earlier rather than on time",                                
+"(Intercept):on time rather than later",                               
+"brand_dose1_AstraZeneca:earlier rather than on time",                       
+"brand_dose1_AstraZeneca:on time rather than later",                       
+"brand_dose1_Moderna:earlier rather than on time",                         
+"brand_dose1_Moderna:on time rather than later",                         
+"(Intercept):earlier rather than on time",                                
+"(Intercept):on time rather than later",                            
+"vaccine_timing_dose1_scaled:earlier rather than on time"  ,                     
+"vaccine_timing_dose1_scaled:on time rather than later" ,                      
+"(Intercept):earlier rather than on time",                                
+"(Intercept):on time rather than later",                              
+"vaccine_timing_dose1_Before ovulation:earlier rather than on time" ,
+"vaccine_timing_dose1_Before ovulation:on time rather than later" ,
+"vaccine_timing_dose1_During ovulation :earlier rather than on time",
+"vaccine_timing_dose1_During ovulation :on time rather than later")
+
+
+
+
+table<-all_models %>% 
+  mutate(OR=round(exp(estimate),3)) %>% 
+  mutate(CILow=round(exp(estimate-1.96*std.error),3))%>%
+  mutate(CIHigh=round(exp(estimate+1.96*std.error),3))%>% 
+  mutate(statistic=round(statistic,3))%>%
+  mutate(p.value=round(p.value,3))%>%
+  mutate(q.value=round(q.value,3))%>%
+  select(term,OR,CILow, CIHigh,statistic,p.value, q.value)%>%
+  kbl(caption = " Timing dose 1 | Univariable models adjusted p-values") %>%
+  kable_paper(bootstrap_options = "striped", full_width = F)%>%
+    pack_rows("Age", 1, 4) %>%
+    pack_rows("Cycle length", 5, 8) %>%
+    pack_rows("Endometriosis", 9, 12) %>%
+    pack_rows("Heavy menstrual bleeding", 13, 16) %>%
+    pack_rows("PCOS", 17, 20) %>%
+    pack_rows("Vaccine Brand", 21, 26) %>%
+    pack_rows("Timing of vaccine (continuous time)", 27, 30) %>%
+    pack_rows("Timing of vaccine (discrete time)", 31, 36) %>%
+    column_spec(1, bold = T, border_right = T) %>%
+  row_spec(row=c(row), bold = T, color = "white", background = "#D7261E") %>%
+  kable_styling(full_width = T)
+  
+  
+
+# Flow and AstraZENECA
+table
+
+table%>%
+  save_kable("Table_Uni_Time1.pdf")
+
+
+
+```
+
+
+
+##### Plot Timing dose 1
+
+```{r plotuniv_timing1}
+
+# plot attempt
+library(dplyr)
+
+# Remove the intercepts and calculate CIs
+all_models2<-all_models %>% 
+  mutate(RRR=round(exp(estimate),3)) %>% 
+  mutate(CILow=round(exp(estimate-1.96*std.error),3))%>% 
+  mutate(CIHigh=round(exp(estimate+1.96*std.error),3))%>% 
+  mutate(statistic=round(statistic,3)) %>%
+filter (term!= c("(Intercept):earlier rather than on time", "(Intercept):on time rather than later") )
+
+#all_models2$term
+x <- data.frame(
+    symptoms=c(rep("Age: Earlier rather than on time", 1), 
+             rep("Age: On time rather than later", 1),
+             rep("Cycle length: Earlier rather than on time", 1),
+             rep("Cycle length: On time rather than later", 1),
+             rep("Endometriosis: Earlier rather than on time", 1),
+             rep("Endometriosis: On time rather than later", 1),
+             rep("Heavy menstrual bleeding: Earlier rather than on time", 1) ,
+             rep("Heavy menstrual bleeding: On time rather than later", 1) ,
+             
+             rep("PCOS: Earlier rather than on time", 1) ,
+             rep("PCOS: On time rather than later", 1) ,
+             rep("AstraZeneca: Earlier rather than on time", 1) ,
+             rep("AstraZeneca: On time rather than later", 1) ,
+             rep("Moderna: Earlier rather than on time", 1) ,
+             rep("Moderna: On time rather than later", 1) ,
+             rep("Vaccine timing: Earlier rather than on time", 1) ,
+             rep("Vaccine timing: On time rather than later", 1) ,
+             rep("Vaccine timing before ovulation:Earlier rather than on time", 1) ,
+             rep("Vaccine timing before ovulation: On time rather than later", 1) ,
+             rep("Vaccine timing around ovulation: Earlier rather than on time", 1) ,
+             rep("Vaccine timing around ovulation: On time rather than later", 1 )),
+            
+    OR=c((all_models2$RRR)),
+    Lower=c((all_models2$CILow)),
+    Upper=c((all_models2$CIHigh)),
+    Variables=c(rep("Age", 2), 
+             rep("Cycle length", 2),
+             rep("Endmometriosis", 2),
+             rep("Heavy menstrual bleeding", 2),
+             rep("PCOS", 2) ,
+             rep("Vaccine brand", 4) ,
+             rep("Vaccine timing (numeric)", 2) ,
+             rep("Vaccine timing (categorical)", 4))
+
+)           
+                        
+                        
+
+
+# Set colours
+library(RColorBrewer)
+# Define the number of colors you want
+nb.cols <- 150
+mycolors <- colorRampPalette(brewer.pal(8, "BrBG"))(nb.cols)
+
+# Plot
+plot<-x %>% 
+  ggplot(aes(x = OR, y=Variables)) + 
+  labs(y = "")+
+ #geom_rect(aes(xmin = 0, xmax = 5,
+#               ymin = -Inf, ymax = Inf, fill = Variables)) +
+  geom_errorbarh(aes(xmin = Lower, xmax = Upper)) +
+  geom_point(aes(colour = Variables, shape = Variables), size = 4 ) +
+  geom_vline(aes(xintercept = 1), linetype = 2, col="red") +
+  scale_shape_manual(values = rep(15, 67)) +
+  scale_fill_manual(values = mycolors) +
+  scale_x_log10() +
+  coord_cartesian(xlim = c(0.1, 7)) +
+  facet_grid(symptoms~., switch = "y") +
+  theme_bw() +
+# theme(legend.position = "none")+
+  theme(panel.spacing.y = unit(0, "points"),
+        panel.border = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.length.y = unit(0, "points"),
+        strip.text.y.left = element_text(angle = 0),
+        strip.background.y = element_blank(),
+        strip.placement = "outside",
+        axis.line = element_line()
+      
+        )+
+  ggtitle("Timing after dose 1")
+
+plot_time1<-plot
+
+# control the legend
+plot+guides(shape=FALSE, size=FALSE, fill=FALSE,colour=guide_legend(ncol=1))
+
+# save the plot
+#ggsave(filename="Figure_uni_Flow1.jpeg", width = 30,  height = 30, units = "cm",dpi = 300)
+
+# save the plot
+ggsave(filename="Figure_uni_Timing1.pdf", width = 30,  height = 15, units = "cm",dpi = 300)
+```
+
+
+
+
+### Timing dose 2
+
+
+```{r modelordinal_timing2, results='asis', echo=FALSE}
+
+# can we test those exposures
+table(data_second$pcos, data_second$timing_dose2_ordered)
+table(data_second$uterine_fibroids, data_second$timing_dose2_ordered)
+table(data_second$endometriosis, data_second$timing_dose2_ordered)
+table(data_second$heavy_menstrual_bleeding, data_second$timing_dose2_ordered)
+
+# relevel
+data_second$timing_dose2<-relevel(data_second$timing_dose2, ref = "On time")
+
+
+# set list of exposures to test
+exposures <- c(
+    Cs(
+        age_years,
+        normal_cycle_day,
+        endometriosis,
+        heavy_menstrual_bleeding,
+        pcos,
+        brand_dose2,
+        vaccine_timing_dose2,
+        vaccine_timing_dose2_phase
+        ))
+
+
+
+### Univariate ----------------------------------------------------
+## model function with proportional odds------------------------------------------------------------
+library(VGAM)
+models_prop <- function(x) {
+    
+        vglm(as.formula(
+            paste0(
+                "timing_dose2_ordered ~  ",
+                x
+                
+            )
+        ), data = data_second,cumulative(parallel=FALSE))
+    
+}
+
+## run logistic models
+models_univariate_prop <- as.list(seq(1,length(exposures))) # create list to store model results
+models_univariate_prop <- pblapply(exposures, models_prop)
+
+
+
+library(data.table)
+
+# create function to get the coef only from the summary table
+foo <- function(vglm) 
+  {
+  coef <- coef(summary(vglm))
+  output <- data.frame(coef)
+  output
+}
+
+#
+smry <-lapply(models_univariate_prop,foo)
+
+# make a list while keeping the first row as names
+all_models <-do.call(rbind, setNames(smry, NULL))
+
+# combine row names into column
+  d <- all_models
+  names <- rownames(d)
+  rownames(d) <- NULL
+  all_models <- cbind(names,d)
+
+
+
+# this is the FDR p values
+all_models$q.value <- p.adjust(all_models$Pr...z..,method = "BH")
+
+
+names(all_models)<-c("term","estimate","std.error","statistic","p.value","q.value")
+
+
+## Table with adjusted p values-------------------------------------------------------------------
+
+row<- which(all_models$q.value<0.05) # to highlight in red those which are significant
+library(kableExtra)
+
+
+# 
+all_models$term <- c(
+"(Intercept):earlier rather than on time",                   
+"(Intercept):on time rather than later",                   
+"age_scaled:earlier rather than on time" ,                   
+"age_scaled:on time rather than later",                    
+"(Intercept):earlier rather than on time",                   
+"(Intercept):on time rather than later",                   
+"cycle_length_scaled:earlier rather than on time",           
+"cycle_length_scaled:on time rather than later",           
+"(Intercept):earlier rather than on time",                   
+"(Intercept):on time rather than later",                   
+"endometriosis:earlier rather than on time",                 
+"endometriosis:on time rather than later",                
+"(Intercept):earlier rather than on time",                  
+"(Intercept):on time rather than later",                  
+"heavy_menstrual_bleeding:earlier rather than on time",     
+"heavy_menstrual_bleeding:on time rather than later",     
+"(Intercept):earlier rather than on time",                   
+"(Intercept):on time rather than later",                   
+"pcos:earlier rather than on time" ,                         
+"pcos:on time rather than later" ,                         
+"(Intercept):earlier rather than on time",                  
+"(Intercept):on time rather than later",   
+"brand_dose2_AstraZeneca:earlier rather than on time",      
+"brand_dose2_AstraZeneca:on time rather than later",       
+"brand_dose2_Moderna:earlier rather than on time",          
+"brand_dose2_Moderna:on time rather than later",           
+"(Intercept):earlier rather than on time",                   
+"(Intercept):on time rather than later",                   
+"vaccine_timing_dose2_scaled:earlier rather than on time"  , 
+"vaccine_timing_dose2_scaled:on time rather than later" ,  
+"(Intercept):earlier rather than on time",                   
+"(Intercept):on time rather than later",                   
+"vaccine_timing_dose2_Before ovulation:earlier rather than on time" ,
+"vaccine_timing_dose2_Before ovulation:on time rather than later" ,
+"vaccine_timing_dose2_During ovulation :earlier rather than on time",
+"vaccine_timing_dose2_During ovulation :on time rather than later")
+
+# table
+
+table<-all_models %>% 
+  mutate(OR=round(exp(estimate),3)) %>% 
+  mutate(CILow=round(exp(estimate-1.96*std.error),3))%>% 
+  mutate(CIHigh=round(exp(estimate+1.96*std.error),3))%>% 
+  mutate(statistic=round(statistic,3))%>%
+  mutate(p.value=round(p.value,3))%>%
+  mutate(q.value=round(q.value,3))%>%
+  select(term,OR,CILow, CIHigh,statistic,p.value, q.value)%>%
+  kbl(caption = "Timing dose 2 | Univariable models adjusted p-values") %>%
+  kable_paper(bootstrap_options = "striped", full_width = F)%>%
+    pack_rows("Age", 1, 4) %>%
+    pack_rows("Cycle length", 5, 8) %>%
+    pack_rows("Endometriosis", 9, 12) %>%
+    pack_rows("Heavy menstrual bleeding", 13, 16) %>%
+    pack_rows("PCOS", 17, 20) %>%
+    pack_rows("Vaccine Brand", 21, 26) %>%
+    pack_rows("Timing of vaccine (continuous time)", 27, 30) %>%
+    pack_rows("Timing of vaccine (discrete time)", 31, 36) %>%
+    column_spec(1, bold = T, border_right = T) %>%
+  row_spec(row=c(row), bold = T, color = "white", background = "#D7261E") %>%
+  kable_styling(full_width = T)
+# table
+table
+
+table%>%
+  save_kable("Table_Uni_Time2.pdf")
+
+
+
+
+
+
+## multivariate-----------------------------------------------------------------------
+modtim2_multiv<-vglm(timing_dose2_ordered ~ age_years+normal_cycle_day+endometriosis ,data=data_second,cumulative(parallel=FALSE))
+
+## function for table
+tablevglm_time2<-function(x){ 
+ df<-as.data.frame(round(coef(summary(x)),3))
+  rownames(df)<-c(
+"(Intercept):earlier rather than on time",                  
+"(Intercept):on time rather than later",    
+"age_scaled:earlier rather than on time",                  
+"age_scaled:on time rather than later",    
+"cycle_length:earlier rather than on time",                  
+"cycle_length:on time rather than later",    
+"endometriosis:earlier rather than on time",                
+"endometriosis:on time rather than later"
+  )
+  names(df)<-c("estimate","std.error","z","Pr(>|z|)")
+ 
+  df<-df %>%
+  mutate(RRR=round(exp(estimate),3)) %>% 
+  mutate(CILow=round(exp(estimate-1.96*std.error),3))%>% 
+  mutate(CIHigh=round(exp(estimate+1.96*std.error),3))
+  
+  names(df)<-c("estimate","std.error","z","Pr(>|z|)","OR","95CI_Low","95CI_High")
+  row<-which(df$`Pr(>|z|)`<0.01)
+ 
+  df%>%
+  select(5,6,7,3,4)%>% 
+  kbl(caption = "Timing after dose 2 | Multivariable model") %>%
+  kable_paper(bootstrap_options = "striped", full_width = F)%>%
+  row_spec(row=c(row), bold = T, color = "white", background = "#D7261E") %>%
+  kable_styling(full_width = T)
+}
+
+
+# table
+tablevglm_time2(modtim2_multiv)
+
+# save multivariable table
+tablevglm_time2(modtim2_multiv)%>%
+  save_kable("Table_Multi_Time2.pdf")
+
+
+
+# Plot --------------------------------------
+### plot
+# create a table of coefficients
+tab<-as.data.frame(coefficients(summary(modtim2_multiv)))
+conf.high<-exp(tab[,1]+1.96*tab[,2])
+conf.low<-exp(tab[,1]-1.96*tab[,2])
+coef<-exp(tab[,1])
+#rownames(tab) <- NULL
+names<-c(
+"(Intercept)",                                
+"(Intercept)",     
+"Age (scaled)_a",                                
+"Age (scaled)_b",  
+"Cycle length (scaled)_a",                      
+"Cycle length (scaled)_b", 
+"Endometriosis_a",                      
+"Endometriosis_b" 
+  )
+risk<-as.character(c("earlier rather than on time","on time rather than later",
+                     "earlier rather than on time","on time rather than later",
+                     "earlier rather than on time","on time rather than later",
+                     "earlier rather than on time","on time rather than later"))
+
+df <- as.data.frame(cbind(names,coef, conf.high,conf.low, risk))
+names(df)<-c("names","coefficients","conf.high","conf.low","Risk")
+
+df$coefficients<-as.numeric(df$coefficients)
+df$conf.high<-as.numeric(df$conf.high)
+df$conf.low<-as.numeric(df$conf.low)
+df$Risk<-as.factor(as.character(df$Risk))
+
+
+# plot
+plot_time2<-df[3:8,]%>%
+  ggplot(aes(x = names, y = coefficients, ymin = conf.low, ymax = conf.high, color = Risk)) +
+  geom_hline(yintercept = 1, linetype = 2) +
+  geom_pointrange() +
+  coord_flip() +
+  labs(
+    y = "Odds-Ratio",
+    x = " ",
+    title = "Timing after dose 2"
+  )+theme_bw()+theme(legend.position="top", legend.direction="horizontal")
+
+pdf("plot_time2.pdf")
+plot_time2
+dev.off()
+
+```
+
+#### Plot timing dose 2
+
+```{r plotuniv_timing22}
+
+# plot attempt
+library(dplyr)
+
+# Remove the intercepts and calculate CIs
+all_models2<-all_models %>% 
+  mutate(RRR=round(exp(estimate),3)) %>% 
+  mutate(CILow=round(exp(estimate-1.96*std.error),3))%>% 
+  mutate(CIHigh=round(exp(estimate+1.96*std.error),3))%>% 
+  mutate(statistic=round(statistic,3)) %>%
+filter (term!= c("(Intercept):earlier rather than on time", "(Intercept):on time rather than later") )
+
+#all_models2$term
+x <- data.frame(
+    symptoms=c(rep("Age: Earlier rather than on time", 1), 
+             rep("Age: On time rather than later", 1),
+             rep("Cycle length: Earlier rather than on time", 1),
+             rep("Cycle length: On time rather than later", 1),
+             rep("Endometriosis: Earlier rather than on time", 1),
+             rep("Endometriosis: On time rather than later", 1),
+             rep("Heavy menstrual bleeding: Earlier rather than on time", 1) ,
+             rep("Heavy menstrual bleeding: On time rather than later", 1) ,
+             
+             rep("PCOS: Earlier rather than on time", 1) ,
+             rep("PCOS: On time rather than later", 1) ,
+             rep("AstraZeneca: Earlier rather than on time", 1) ,
+             rep("AstraZeneca: On time rather than later", 1) ,
+             rep("Moderna: Earlier rather than on time", 1) ,
+             rep("Moderna: On time rather than later", 1) ,
+             rep("Vaccine timing: Earlier rather than on time", 1) ,
+             rep("Vaccine timing: On time rather than later", 1) ,
+             rep("Vaccine timing before ovulation:Earlier rather than on time", 1) ,
+             rep("Vaccine timing before ovulation: On time rather than later", 1) ,
+             rep("Vaccine timing around ovulation: Earlier rather than on time", 1) ,
+             rep("Vaccine timing around ovulation: On time rather than later", 1 )),
+            
+    OR=c((all_models2$RRR)),
+    Lower=c((all_models2$CILow)),
+    Upper=c((all_models2$CIHigh)),
+    Variables=c(rep("Age", 2), 
+             rep("Cycle length", 2),
+             rep("Endometriosis", 2),
+             rep("Heavy menstrual bleeding", 2),
+             rep("PCOS", 2) ,
+             rep("Vaccine brand", 4) ,
+             rep("Vaccine timing (numeric)", 2) ,
+             rep("Vaccine timing (categorical)", 4))
+
+)           
+                        
+                        
+
+
+# Set colours
+library(RColorBrewer)
+# Define the number of colors you want
+nb.cols <- 150
+mycolors <- colorRampPalette(brewer.pal(8, "BrBG"))(nb.cols)
+
+# Plot
+plot<-x %>% 
+  ggplot(aes(x = OR, y=Variables)) + 
+  labs(y = "")+
+ #geom_rect(aes(xmin = 0, xmax = 5,
+#               ymin = -Inf, ymax = Inf, fill = Variables)) +
+  geom_errorbarh(aes(xmin = Lower, xmax = Upper)) +
+  geom_point(aes(colour = Variables, shape = Variables), size = 4 ) +
+  geom_vline(aes(xintercept = 1), linetype = 2, col="red") +
+  scale_shape_manual(values = rep(15, 67)) +
+  scale_fill_manual(values = mycolors) +
+  scale_x_log10() +
+  coord_cartesian(xlim = c(0.1, 7)) +
+  facet_grid(symptoms~., switch = "y") +
+  theme_bw() +
+#  theme(legend.position = "none")+
+  theme(panel.spacing.y = unit(0, "points"),
+        panel.border = element_blank(),
+        axis.text.y = element_blank(),
+        axis.ticks.length.y = unit(0, "points"),
+        strip.text.y.left = element_text(angle = 0),
+        strip.background.y = element_blank(),
+        strip.placement = "outside",
+        axis.line = element_line()
+      
+        )+
+  ggtitle("Timing after dose 2")
+
+plot_time2<-plot
+
+# control the legend
+plot+guides(shape=FALSE, size=FALSE, fill=FALSE,colour=guide_legend(ncol=1))
+
+
+# save the plot
+ggsave(filename="Figure_uni_Timing2.pdf", width = 30,  height = 15, units = "cm",dpi = 300)
+```
+
+
+
+
+
+# Plot final
+```{r plotfinal}
+pdf("outcomes.pdf",width=14, height=10)
+grid.arrange(
+  plot_flow1,
+  plot_flow2,
+  plot_time1,
+  plot_time2,
+  ncol=2)
+dev.off()
+```
